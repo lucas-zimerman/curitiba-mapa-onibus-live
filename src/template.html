@@ -317,7 +317,62 @@ window.addEventListener('error', function (e) {
     }
   });
 
-  var cv = document.getElementById('map'), ctx = cv.getContext('2d');
+  // The vehicle dots are drawn with WebGL when it is available: one GPU draw call per pass, blended on
+  // the GPU. The route layer `st` is still drawn with canvas 2D (only when the day, size or zoom changes)
+  // and uploaded as a texture. Without WebGL everything is drawn with canvas 2D as before.
+  var cv = document.getElementById('map'), gl = null, ctx = null, glr = null, stDirty = true, upl = null, dotAlpha = 1;
+  try { gl = cv.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false }); } catch (e) { gl = null; }
+  if (gl && !initGL()) {
+    // a context we can't use still owns the canvas, so swap in a fresh one for canvas 2D
+    var fresh = cv.cloneNode(false); cv.parentNode.replaceChild(fresh, cv); cv = fresh; gl = null;
+  }
+  if (!gl) ctx = cv.getContext('2d');
+  cv.addEventListener('webglcontextlost', function (e) { e.preventDefault(); });
+  cv.addEventListener('webglcontextrestored', function () { initGL(); stDirty = true; dirty = true; });
+
+  function initGL() {
+    function sh(type, src) {
+      var o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
+      return gl.getShaderParameter(o, gl.COMPILE_STATUS) ? o : null;
+    }
+    function prog(vsrc, fsrc) {
+      var a = sh(gl.VERTEX_SHADER, vsrc), b = sh(gl.FRAGMENT_SHADER, fsrc);
+      if (!a || !b) return null;
+      var o = gl.createProgram(); gl.attachShader(o, a); gl.attachShader(o, b);
+      gl.bindAttribLocation(o, 0, 'a'); gl.linkProgram(o);
+      return gl.getProgramParameter(o, gl.LINK_STATUS) ? o : null;
+    }
+    // dots: a point sprite per vehicle, `a` in device pixels; r = radius, w = white outline width, s = point size
+    var dot = prog(
+      'attribute vec2 a;uniform vec2 v;uniform mediump float s;' + // same precision as the fragment shader's s, or linking fails
+      'void main(){gl_Position=vec4(a.x/v.x*2.0-1.0,1.0-a.y/v.y*2.0,0.0,1.0);gl_PointSize=s;}',
+      'precision mediump float;uniform vec4 c;uniform float r,w,s;' +
+      'void main(){float d=length(gl_PointCoord-0.5)*s;float k=clamp(r+w*0.5+0.5-d,0.0,1.0);' +
+      'vec3 col=(w>0.0&&d>r-w*0.5)?vec3(1.0):c.rgb;gl_FragColor=vec4(col,c.a*k);}');
+    // route layer: a textured quad, t = scale.xy and offset.zw as fractions of the canvas
+    var bg = prog(
+      'attribute vec2 a;uniform vec4 t;varying vec2 u;' +
+      'void main(){vec2 q=a*t.xy+t.zw;gl_Position=vec4(q.x*2.0-1.0,1.0-q.y*2.0,0.0,1.0);u=a;}',
+      'precision mediump float;varying vec2 u;uniform sampler2D m;void main(){gl_FragColor=texture2D(m,u);}');
+    if (!dot || !bg) return false;
+    var qb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.enableVertexAttribArray(0);
+    function loc(o, n) { return gl.getUniformLocation(o, n); }
+    glr = {
+      dot: dot, bg: bg, qb: qb, db: gl.createBuffer(), tex: tex,
+      maxPt: gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] || 64,
+      v: loc(dot, 'v'), s: loc(dot, 's'), c: loc(dot, 'c'), r: loc(dot, 'r'), w: loc(dot, 'w'), t: loc(bg, 't')
+    };
+    return true;
+  }
   var st = document.createElement('canvas'), sctx = st.getContext('2d');
   var spark = document.getElementById('spark'), kctx = spark.getContext('2d');
   var sparkBase = document.createElement('canvas');
@@ -328,6 +383,16 @@ window.addEventListener('error', function (e) {
   };
   var css = getComputedStyle(document.documentElement);
   var BG = css.getPropertyValue('--bg').trim() || '#0a0c11';
+  var BGv = /^#[0-9a-f]{6}$/i.test(BG) ? [1, 3, 5].map(function (i) { return parseInt(BG.substr(i, 2), 16) / 255; }) : [0.04, 0.047, 0.067];
+  function colr(r, g, b, a) { return { v: [r / 255, g / 255, b / 255, a], s: 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')' }; }
+  var COL = {
+    busHalo: colr(255, 138, 31, 0.18), bus: colr(255, 154, 58, 1),
+    ligHalo: colr(184, 188, 200, 0.18), lig: colr(211, 214, 224, 1),
+    brtHalo: colr(255, 77, 77, 0.26), brt: colr(255, 100, 100, 1),
+    busSelHalo: colr(255, 138, 31, 0.35), busSel: colr(255, 178, 77, 1),
+    ligSelHalo: colr(184, 188, 200, 0.35), ligSel: colr(230, 232, 239, 1),
+    brtSelHalo: colr(255, 77, 77, 0.40), brtSel: colr(255, 107, 107, 1)
+  };
 
   var ns0 = nowState();
   // opens at 03:00, the last hour of the 04:00-to-04:00 service day, on today's timetable
@@ -446,6 +511,7 @@ window.addEventListener('error', function (e) {
     });
     if ('letterSpacing' in sctx) sctx.letterSpacing = '0px';
     vs = { z: view.z, x: view.x, y: view.y };
+    stDirty = true;
   }
 
   function buildSpark() {
@@ -485,29 +551,45 @@ window.addEventListener('error', function (e) {
     out[k + 1] = P.py[lo] + (P.py[hi] - P.py[lo]) * u;
   }
 
+  // One pass of n dots from xy (device pixels): radius r, colour c, additive ('lighter') or normal blend,
+  // optional white outline of width w.
+  function dots(xy, n, r, c, add, w) {
+    if (!n) return;
+    var i;
+    if (gl) {
+      if (upl !== xy) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, glr.db);
+        gl.bufferData(gl.ARRAY_BUFFER, xy.subarray(0, 2 * n), gl.DYNAMIC_DRAW);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        upl = xy;
+      }
+      gl.uniform1f(glr.s, Math.min(glr.maxPt, Math.ceil(2 * (r + w / 2) + 2)));
+      gl.uniform1f(glr.r, r); gl.uniform1f(glr.w, w);
+      gl.uniform4f(glr.c, c.v[0], c.v[1], c.v[2], c.v[3] * dotAlpha);
+      gl.blendFunc(gl.SRC_ALPHA, add ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.POINTS, 0, n);
+      return;
+    }
+    // canvas 2D: all n circles in one path, one fill (measured faster than stamping sprites with drawImage)
+    ctx.globalCompositeOperation = add ? 'lighter' : 'source-over';
+    ctx.globalAlpha = dotAlpha;
+    ctx.fillStyle = c.s;
+    ctx.beginPath();
+    for (i = 0; i < n; i++) { ctx.moveTo(xy[2 * i] + r, xy[2 * i + 1]); ctx.arc(xy[2 * i], xy[2 * i + 1], r, 0, 6.2832); }
+    ctx.fill();
+    if (w) { ctx.lineWidth = w; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
+  }
+
+  var selXY = new Float32Array(2 * 8000);
   function drawSel(xy, pi, n, halo, core) {
-    var i, x, y;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    for (i = 0; i < n; i++) {
+    var k = 0;
+    for (var i = 0; i < n; i++) {
       if (paths[pi[i]].r !== sel) continue;
-      x = xy[2 * i]; y = xy[2 * i + 1];
-      ctx.moveTo(x + 7 * dpr * zk, y); ctx.arc(x, y, 7 * dpr * zk, 0, 6.2832);
+      selXY[2 * k] = xy[2 * i]; selXY[2 * k + 1] = xy[2 * i + 1]; k++;
     }
-    ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = core;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1 * dpr;
-    ctx.beginPath();
-    for (i = 0; i < n; i++) {
-      if (paths[pi[i]].r !== sel) continue;
-      x = xy[2 * i]; y = xy[2 * i + 1];
-      ctx.moveTo(x + 3.2 * dpr * zk, y); ctx.arc(x, y, 3.2 * dpr * zk, 0, 6.2832);
-    }
-    ctx.fill();
-    ctx.stroke();
+    upl = null;
+    dots(selXY, k, 7 * dpr * zk, halo, true, 0);
+    dots(selXY, k, 3.2 * dpr * zk, core, false, 1 * dpr);
   }
 
   function setSel(r, name, mode) {
@@ -602,15 +684,34 @@ window.addEventListener('error', function (e) {
   });
 
   function draw() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-    var kk = view.z / vs.z;
-    if (kk === 1 && view.x === vs.x && view.y === vs.y) ctx.drawImage(st, 0, 0);
-    else {
-      ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
-      ctx.setTransform(kk, 0, 0, kk, (view.x - vs.x * kk) * dpr, (view.y - vs.y * kk) * dpr);
-      ctx.drawImage(st, 0, 0);
+    var kk = view.z / vs.z, ox = (view.x - vs.x * kk) * dpr, oy = (view.y - vs.y * kk) * dpr;
+    if (gl) {
+      gl.viewport(0, 0, cv.width, cv.height);
+      gl.clearColor(BGv[0], BGv[1], BGv[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindTexture(gl.TEXTURE_2D, glr.tex);
+      if (stDirty) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, st); stDirty = false; }
+      gl.disable(gl.BLEND);
+      gl.useProgram(glr.bg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, glr.qb);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform4f(glr.t, st.width * kk / cv.width, st.height * kk / cv.height, ox / cv.width, oy / cv.height);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.enable(gl.BLEND);
+      gl.useProgram(glr.dot);
+      gl.uniform2f(glr.v, cv.width, cv.height);
+      upl = null;
+    } else {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      if (kk === 1 && ox === 0 && oy === 0) ctx.drawImage(st, 0, 0);
+      else {
+        ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.setTransform(kk, 0, 0, kk, ox, oy);
+        ctx.drawImage(st, 0, 0);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      }
     }
     zk = Math.min(2, 1 + 0.15 * (view.z - 1));
     var T = D.trips[day], abs = 14400 + simT, nb = 0, nr = 0, nl = 0, sa = 0, i, len = T.p.length;
@@ -633,42 +734,21 @@ window.addEventListener('error', function (e) {
     if (!vis.lig) nl = 0;
     if (!vis.brt) nr = 0;
     lastNb = nb; lastNl = nl; lastNr = nr;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = sel !== null ? 0.2 : 1;
-    var r = 0.75 * dpr * zk;
-    ctx.fillStyle = 'rgba(255,138,31,0.18)';
-    ctx.beginPath();
-    for (i = 0; i < nb; i++) { ctx.moveTo(busXY[2 * i] + r * 2.6, busXY[2 * i + 1]); ctx.arc(busXY[2 * i], busXY[2 * i + 1], r * 2.6, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#ff9a3a';
-    ctx.beginPath();
-    for (i = 0; i < nb; i++) { ctx.moveTo(busXY[2 * i] + r, busXY[2 * i + 1]); ctx.arc(busXY[2 * i], busXY[2 * i + 1], r, 0, 6.2832); }
-    ctx.fill();
-    var rl = 1.9 * dpr * zk;
-    ctx.fillStyle = 'rgba(184,188,200,0.18)';
-    ctx.beginPath();
-    for (i = 0; i < nl; i++) { ctx.moveTo(ligXY[2 * i] + rl * 2.4, ligXY[2 * i + 1]); ctx.arc(ligXY[2 * i], ligXY[2 * i + 1], rl * 2.4, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#d3d6e0';
-    ctx.beginPath();
-    for (i = 0; i < nl; i++) { ctx.moveTo(ligXY[2 * i] + rl, ligXY[2 * i + 1]); ctx.arc(ligXY[2 * i], ligXY[2 * i + 1], rl, 0, 6.2832); }
-    ctx.fill();
-    var rb = 2.6 * dpr * zk;
-    ctx.fillStyle = 'rgba(255,77,77,0.26)';
-    ctx.beginPath();
-    for (i = 0; i < nr; i++) { ctx.moveTo(brtXY[2 * i] + rb * 2.4, brtXY[2 * i + 1]); ctx.arc(brtXY[2 * i], brtXY[2 * i + 1], rb * 2.4, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#ff6464';
-    ctx.beginPath();
-    for (i = 0; i < nr; i++) { ctx.moveTo(brtXY[2 * i] + rb, brtXY[2 * i + 1]); ctx.arc(brtXY[2 * i], brtXY[2 * i + 1], rb, 0, 6.2832); }
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    dotAlpha = sel !== null ? 0.2 : 1;
+    var r = 0.75 * dpr * zk, rl = 1.9 * dpr * zk, rb = 2.6 * dpr * zk;
+    dots(busXY, nb, r * 2.6, COL.busHalo, true, 0);
+    dots(busXY, nb, r, COL.bus, true, 0);
+    dots(ligXY, nl, rl * 2.4, COL.ligHalo, true, 0);
+    dots(ligXY, nl, rl, COL.lig, true, 0);
+    dots(brtXY, nr, rb * 2.4, COL.brtHalo, true, 0);
+    dots(brtXY, nr, rb, COL.brt, true, 0);
+    dotAlpha = 1;
     if (sel !== null) {
-      drawSel(busXY, busPI, nb, 'rgba(255,138,31,0.35)', '#ffb24d');
-      drawSel(ligXY, ligPI, nl, 'rgba(184,188,200,0.35)', '#e6e8ef');
-      drawSel(brtXY, brtPI, nr, 'rgba(255,77,77,0.40)', '#ff6b6b');
+      drawSel(busXY, busPI, nb, COL.busSelHalo, COL.busSel);
+      drawSel(ligXY, ligPI, nl, COL.ligSelHalo, COL.ligSel);
+      drawSel(brtXY, brtPI, nr, COL.brtSelHalo, COL.brtSel);
     }
-    ctx.globalCompositeOperation = 'source-over';
+    if (ctx) { ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; }
     var m = Math.min(1440, Math.floor(simT / 60));
     if (m !== lastMin) {
       lastMin = m;
