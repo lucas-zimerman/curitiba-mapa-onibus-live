@@ -1,3 +1,4 @@
 gtfs/
 __pycache__/
 *.zip
+snd/*.mp3
