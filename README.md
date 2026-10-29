@@ -1,7 +1,6 @@
 # Curitiba bus map
 
 A timelapse of one day of scheduled bus service in Curitiba. Routes glow where service is heavy, and every dot is a vehicle moving along its route. A clock, vehicle counts and a daily activity graph run alongside.
-**View it:** https://lucas-zimerman.github.io/curitiba-mapa-onibus-live/
 
 > **Not live.** Despite the repository name, this plays back the published timetable. It does not use live GPS. Positions are where the timetable says each bus should be, with trip durations estimated from route length.
 
@@ -11,7 +10,12 @@ A timelapse of one day of scheduled bus service in Curitiba. Routes glow where s
 - Three groups with their own colour, each toggled by tapping its count: buses (orange), Ligeirinho (gray), Expresso and Ligeirão BRT (red)
 - Tap a dot to highlight that route and see how many of its buses are running; tap the map again to clear
 - Pinch to zoom, drag to pan (mouse wheel on desktop)
-- Larger clock card and route tag on desktop
+- Opens at 03:00, using today's timetable on your device (weekday, Saturday or Sunday)
+- Speeds: Sluggish, Slow, Normal, Fast and Live (real time from wherever the timelapse is)
+- Portuguese and English, picked from the browser language, with a PT/EN switch above the control bar (choice is remembered)
+- Larger clock card and route tag on desktop and on mobile in portrait
+- Starts paused; background music (“Stranger Things” by Music_Unlimited, Pixabay Content License) plays with the timelapse. A speaker button next to PT/EN mutes it; it starts unmuted on desktop and muted on touch devices. The track is downloaded only the first time it plays, then loops
+- The track ships as `snd/snd.opus.bin` (Opus, 52 kbps) with `snd/snd.mp3.bin` (MP3, 56 kbps) as a fallback for browsers without Opus, about 1 MB each. `python3 scripts/encode_sound.py` makes both from `snd/snd.mp3` with ffmpeg and scrambles them. The mp3 itself is not committed
 
 ## Data
 

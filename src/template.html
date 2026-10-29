@@ -1,3 +1,4 @@
+<meta charset="utf-8">
 <title>Curitiba Day Map</title>
 <meta name="claude:viewport-fit-sides" content="cover">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -20,7 +21,21 @@
   --f-body: 'Barlow', system-ui, -apple-system, 'Segoe UI', sans-serif;
   color-scheme: dark;
 }
-html, body { height: 100%; }
+html, body { height: 100%; box-sizing: border-box; overscroll-behavior: none; }
+#err {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  top: 8px;
+  z-index: 50;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #3a0d12;
+  border: 1px solid #ff6b6b;
+  color: #ffd7d7;
+  font: 600 12px/1.35 system-ui, -apple-system, sans-serif;
+  word-break: break-word;
+}
 body {
   background: var(--bg);
   color: var(--fg);
@@ -32,9 +47,8 @@ body {
   -webkit-tap-highlight-color: transparent;
 }
 #map { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--bg); touch-action: none; }
-.reset {
-  position: absolute;
-  right: 0;
+.floaters { position: absolute; right: 0; display: flex; align-items: center; gap: 6px; }
+.reset, .langbtn, .sndbtn {
   min-height: 32px;
   padding: 0 12px;
   border-radius: 16px;
@@ -44,6 +58,13 @@ body {
   -webkit-backdrop-filter: blur(10px);
   backdrop-filter: blur(10px);
 }
+.langbtn { display: inline-flex; align-items: center; gap: 2px; padding: 0 3px; }
+.langbtn span { padding: 6px 8px; border-radius: 13px; color: var(--muted); letter-spacing: 0.04em; }
+.sndbtn { display: inline-flex; align-items: center; justify-content: center; width: 34px; padding: 0; color: var(--fg); }
+.sndbtn svg { width: 16px; height: 16px; }
+.sndbtn[aria-pressed="false"] { color: var(--muted); }
+.note a { color: var(--fg); }
+.langbtn span.on { background: rgba(255, 255, 255, 0.16); color: var(--fg); }
 .ui {
   position: relative;
   height: 100%;
@@ -75,6 +96,9 @@ body {
 .sel b.m2 { color: var(--lig); }
 @media (min-width: 900px) and (hover: hover) and (pointer: fine) {
   .top-stack { zoom: 2; }
+}
+@media (max-width: 600px) and (orientation: portrait) and (pointer: coarse) {
+  .top-stack { zoom: 1.5; }
 }
 .sel .selcount { margin-top: 3px; font: 600 12px/1.2 var(--f-body); font-variant-numeric: tabular-nums; }
 .sel .selcount b { font-size: 15px; }
@@ -165,7 +189,11 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
 
 <canvas id="map" aria-label="Map of Curitiba showing buses and BRT vehicles moving along their routes through the day"></canvas>
 <div class="ui">
-  <button type="button" class="reset" id="zoomReset" hidden>Reset zoom</button>
+  <div class="floaters" id="floaters">
+    <button type="button" class="reset" id="zoomReset" hidden>Reset zoom</button>
+    <button type="button" class="sndbtn" id="snd" aria-pressed="true" aria-label="Music on. Tap to mute."></button>
+    <button type="button" class="langbtn" id="lang" aria-label="Language: English. Tap to switch to Portuguese."><span data-l="pt">PT</span><span data-l="en" class="on">EN</span></button>
+  </div>
   <div class="top-stack">
   <section class="hud panel" aria-label="Current time and vehicle counts">
     <div class="top">
@@ -194,13 +222,76 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
 
 <script type="application/json" id="data">__DATA__</script>
 <script>
+// Shows any startup or runtime error on screen, so a blank page explains itself.
+window.addEventListener('error', function (e) {
+  try {
+    var b = document.getElementById('err');
+    if (!b) { b = document.createElement('div'); b.id = 'err'; b.setAttribute('role', 'alert'); document.body.appendChild(b); }
+    b.textContent = 'Error: ' + (e.message || 'unknown') + (e.lineno ? ' (line ' + e.lineno + ')' : '') + '. Reload the page; if it persists, send this message.';
+  } catch (x) { /* nothing more to do */ }
+});
+</script>
+<script>
 (function () {
   'use strict';
   var D = JSON.parse(document.getElementById('data').textContent);
   var SC = D.scale, LON0 = D.origin[0], LAT0 = D.origin[1];
   var KX = 111320 * Math.cos(LAT0 * Math.PI / 180), KY = 110574;
-  var NAMES = { wk: 'Weekday', sat: 'Saturday', sun: 'Sunday' };
-  var SPEEDS = [{ n: 'Slow', v: 10 }, { n: 'Normal', v: 30 }, { n: 'Fast', v: 90 }];
+  var I18N = {
+    en: {
+      num: 'en', wk: 'Weekday', sat: 'Saturday', sun: 'Sunday',
+      sluggish: 'Sluggish', slow: 'Slow', normal: 'Normal', fast: 'Fast', live: 'Live',
+      map: 'Map of Curitiba showing buses and BRT vehicles moving along their routes through the day',
+      hud: 'Current time and vehicle counts', counts: 'Show or hide vehicle groups',
+      bus: 'Buses', lig: 'Ligeirinho', brt: 'BRT',
+      busAria: 'Buses on the road. Tap to hide or show.',
+      ligAria: 'Ligeirinho on the road. Tap to hide or show.',
+      brtAria: 'BRT on the road. Tap to hide or show.',
+      reset: 'Reset zoom', pause: 'Pause', play: 'Play', scrub: 'Time of day',
+      dayAria: 'Timetable day: {d}. Tap to change.',
+      spdAria: 'Playback speed: {s}', spdLiveAria: 'Playback speed: live, real time',
+      info: 'About this data',
+      note: 'Built from the URBS Curitiba timetable (GTFS), not live GPS: positions show where the timetable says each bus should be. Trip durations are estimated from route length, at 18 km/h for buses, 21 km/h for Ligeirinho and 24 km/h for BRT (Expresso and Ligeirão lines).' +
+        '<br>Music: <a href="https://pixabay.com/music/synthwave-stranger-things-124008/" target="_blank" rel="noopener">“Stranger Things”</a> by <a href="https://pixabay.com/users/music_unlimited-27600023/" target="_blank" rel="noopener">Music_Unlimited</a>, from Pixabay, used under the <a href="https://pixabay.com/service/license-summary/" target="_blank" rel="noopener">Pixabay Content License</a>.',
+      sndOn: 'Music on. Tap to mute.', sndOff: 'Music off. Tap to play music.',
+      clear: 'Tap the map to clear', running: ' buses running', running1: ' bus running',
+      langAria: 'Language: English. Tap to switch to Portuguese.'
+    },
+    pt: {
+      num: 'pt-BR', wk: 'Dia útil', sat: 'Sábado', sun: 'Domingo',
+      sluggish: 'Bem lento', slow: 'Lento', normal: 'Normal', fast: 'Rápido', live: 'Ao vivo',
+      map: 'Mapa de Curitiba com ônibus e BRT se movendo pelas rotas ao longo do dia',
+      hud: 'Horário atual e quantidade de veículos', counts: 'Mostrar ou ocultar grupos de veículos',
+      bus: 'Ônibus', lig: 'Ligeirinho', brt: 'BRT',
+      busAria: 'Ônibus em circulação. Toque para ocultar ou mostrar.',
+      ligAria: 'Ligeirinho em circulação. Toque para ocultar ou mostrar.',
+      brtAria: 'BRT em circulação. Toque para ocultar ou mostrar.',
+      reset: 'Redefinir zoom', pause: 'Pausar', play: 'Reproduzir', scrub: 'Hora do dia',
+      dayAria: 'Dia da tabela de horários: {d}. Toque para mudar.',
+      spdAria: 'Velocidade: {s}', spdLiveAria: 'Velocidade: ao vivo, em tempo real',
+      info: 'Sobre os dados',
+      note: 'Feito a partir da tabela de horários da URBS Curitiba (GTFS), não do GPS ao vivo: as posições mostram onde a tabela diz que cada ônibus deveria estar. A duração das viagens é estimada pelo comprimento da rota, a 18 km/h para ônibus, 21 km/h para Ligeirinho e 24 km/h para BRT (linhas Expresso e Ligeirão).' +
+        '<br>Música: <a href="https://pixabay.com/music/synthwave-stranger-things-124008/" target="_blank" rel="noopener">“Stranger Things”</a>, de <a href="https://pixabay.com/users/music_unlimited-27600023/" target="_blank" rel="noopener">Music_Unlimited</a>, via Pixabay, usada sob a <a href="https://pixabay.com/service/license-summary/" target="_blank" rel="noopener">Licença de Conteúdo da Pixabay</a>.',
+      sndOn: 'Música ligada. Toque para silenciar.', sndOff: 'Música desligada. Toque para ouvir.',
+      clear: 'Toque no mapa para limpar', running: ' ônibus em operação', running1: ' ônibus em operação',
+      langAria: 'Idioma: Português. Toque para mudar para inglês.'
+    }
+  };
+  var lang = null;
+  try { var sv = localStorage.getItem('cwm-lang'); if (sv === 'pt' || sv === 'en') lang = sv; } catch (e) { /* storage unavailable */ }
+  if (!lang) {
+    var nlang = (navigator.languages && navigator.languages[0]) || navigator.language || 'en';
+    lang = /^pt/i.test(nlang) ? 'pt' : 'en';
+  }
+  var L = I18N[lang];
+  var SPEEDS = [{ k: 'sluggish', v: 5 }, { k: 'slow', v: 10 }, { k: 'normal', v: 30 }, { k: 'fast', v: 90 }, { k: 'live', v: 1 / 60 }];
+
+  // Device clock -> position on the 04:00-to-04:00 service day, plus which timetable applies.
+  function nowState() {
+    var d = new Date(), s = d.getHours() * 3600 + d.getMinutes() * 60 + d.getSeconds(), dow = d.getDay();
+    if (s < 4 * 3600) { s += 86400; dow = (dow + 6) % 7; }
+    return { t: s - 4 * 3600, day: dow === 0 ? 'sun' : dow === 6 ? 'sat' : 'wk' };
+  }
   var PLACES = [
     ['CENTRO', -49.2733, -25.4284], ['SANTA FELICIDADE', -49.3223, -25.4006],
     ['BOQUEIRÃO', -49.2478, -25.5036], ['PINHEIRINHO', -49.2985, -25.5200],
@@ -226,7 +317,62 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
     }
   });
 
-  var cv = document.getElementById('map'), ctx = cv.getContext('2d');
+  // The vehicle dots are drawn with WebGL when it is available: one GPU draw call per pass, blended on
+  // the GPU. The route layer `st` is still drawn with canvas 2D (only when the day, size or zoom changes)
+  // and uploaded as a texture. Without WebGL everything is drawn with canvas 2D as before.
+  var cv = document.getElementById('map'), gl = null, ctx = null, glr = null, stDirty = true, upl = null, dotAlpha = 1;
+  try { gl = cv.getContext('webgl', { alpha: false, antialias: false, depth: false, stencil: false }); } catch (e) { gl = null; }
+  if (gl && !initGL()) {
+    // a context we can't use still owns the canvas, so swap in a fresh one for canvas 2D
+    var fresh = cv.cloneNode(false); cv.parentNode.replaceChild(fresh, cv); cv = fresh; gl = null;
+  }
+  if (!gl) ctx = cv.getContext('2d');
+  cv.addEventListener('webglcontextlost', function (e) { e.preventDefault(); });
+  cv.addEventListener('webglcontextrestored', function () { initGL(); stDirty = true; dirty = true; });
+
+  function initGL() {
+    function sh(type, src) {
+      var o = gl.createShader(type); gl.shaderSource(o, src); gl.compileShader(o);
+      return gl.getShaderParameter(o, gl.COMPILE_STATUS) ? o : null;
+    }
+    function prog(vsrc, fsrc) {
+      var a = sh(gl.VERTEX_SHADER, vsrc), b = sh(gl.FRAGMENT_SHADER, fsrc);
+      if (!a || !b) return null;
+      var o = gl.createProgram(); gl.attachShader(o, a); gl.attachShader(o, b);
+      gl.bindAttribLocation(o, 0, 'a'); gl.linkProgram(o);
+      return gl.getProgramParameter(o, gl.LINK_STATUS) ? o : null;
+    }
+    // dots: a point sprite per vehicle, `a` in device pixels; r = radius, w = white outline width, s = point size
+    var dot = prog(
+      'attribute vec2 a;uniform vec2 v;uniform mediump float s;' + // same precision as the fragment shader's s, or linking fails
+      'void main(){gl_Position=vec4(a.x/v.x*2.0-1.0,1.0-a.y/v.y*2.0,0.0,1.0);gl_PointSize=s;}',
+      'precision mediump float;uniform vec4 c;uniform float r,w,s;' +
+      'void main(){float d=length(gl_PointCoord-0.5)*s;float k=clamp(r+w*0.5+0.5-d,0.0,1.0);' +
+      'vec3 col=(w>0.0&&d>r-w*0.5)?vec3(1.0):c.rgb;gl_FragColor=vec4(col,c.a*k);}');
+    // route layer: a textured quad, t = scale.xy and offset.zw as fractions of the canvas
+    var bg = prog(
+      'attribute vec2 a;uniform vec4 t;varying vec2 u;' +
+      'void main(){vec2 q=a*t.xy+t.zw;gl_Position=vec4(q.x*2.0-1.0,1.0-q.y*2.0,0.0,1.0);u=a;}',
+      'precision mediump float;varying vec2 u;uniform sampler2D m;void main(){gl_FragColor=texture2D(m,u);}');
+    if (!dot || !bg) return false;
+    var qb = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, qb);
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), gl.STATIC_DRAW);
+    var tex = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.enableVertexAttribArray(0);
+    function loc(o, n) { return gl.getUniformLocation(o, n); }
+    glr = {
+      dot: dot, bg: bg, qb: qb, db: gl.createBuffer(), tex: tex,
+      maxPt: gl.getParameter(gl.ALIASED_POINT_SIZE_RANGE)[1] || 64,
+      v: loc(dot, 'v'), s: loc(dot, 's'), c: loc(dot, 'c'), r: loc(dot, 'r'), w: loc(dot, 'w'), t: loc(bg, 't')
+    };
+    return true;
+  }
   var st = document.createElement('canvas'), sctx = st.getContext('2d');
   var spark = document.getElementById('spark'), kctx = spark.getContext('2d');
   var sparkBase = document.createElement('canvas');
@@ -237,12 +383,22 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
   };
   var css = getComputedStyle(document.documentElement);
   var BG = css.getPropertyValue('--bg').trim() || '#0a0c11';
+  var BGv = /^#[0-9a-f]{6}$/i.test(BG) ? [1, 3, 5].map(function (i) { return parseInt(BG.substr(i, 2), 16) / 255; }) : [0.04, 0.047, 0.067];
+  function colr(r, g, b, a) { return { v: [r / 255, g / 255, b / 255, a], s: 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')' }; }
+  var COL = {
+    busHalo: colr(255, 138, 31, 0.18), bus: colr(255, 154, 58, 1),
+    ligHalo: colr(184, 188, 200, 0.18), lig: colr(211, 214, 224, 1),
+    brtHalo: colr(255, 77, 77, 0.26), brt: colr(255, 100, 100, 1),
+    busSelHalo: colr(255, 138, 31, 0.35), busSel: colr(255, 178, 77, 1),
+    ligSelHalo: colr(184, 188, 200, 0.35), ligSel: colr(230, 232, 239, 1),
+    brtSelHalo: colr(255, 77, 77, 0.40), brtSel: colr(255, 107, 107, 1)
+  };
 
-  var day = 'wk', simT = 3.5 * 3600, playing = true, speedI = 1, dirty = true, lastMin = -1, dragging = false;
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  if (reduce) playing = false;
+  var ns0 = nowState();
+  // opens at 03:00, the last hour of the 04:00-to-04:00 service day, on today's timetable
+  var day = ns0.day, simT = 23 * 3600, playing = false, speedI = 2, dirty = true, lastMin = -1, dragging = false, anchor = null;
   var vis = { bus: true, lig: true, brt: true };
-  var sel = null, selName = '', selNum = null, selTxt = null, lastSa = -1;
+  var sel = null, selName = '', selMode = 0, selNum = null, selTxt = null, lastSa = -1;
   var busPI = new Int16Array(8000), brtPI = new Int16Array(3000), ligPI = new Int16Array(3000);
   var lastNb = 0, lastNl = 0, lastNr = 0;
   var selEl = document.getElementById('sel');
@@ -297,7 +453,7 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
       }
     });
     clampView(); applyView(); viewDirty = false;
-    zoomResetBtn.style.bottom = (el.dock.getBoundingClientRect().height + 8) + 'px';
+    document.getElementById('floaters').style.bottom = (el.dock.getBoundingClientRect().height + 8) + 'px';
     var r = spark.getBoundingClientRect();
     sparkK = Math.max(1, r.height / 24);
     spark.width = sparkBase.width = Math.max(10, Math.round(r.width * dpr));
@@ -355,6 +511,7 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
     });
     if ('letterSpacing' in sctx) sctx.letterSpacing = '0px';
     vs = { z: view.z, x: view.x, y: view.y };
+    stDirty = true;
   }
 
   function buildSpark() {
@@ -394,42 +551,58 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
     out[k + 1] = P.py[lo] + (P.py[hi] - P.py[lo]) * u;
   }
 
+  // One pass of n dots from xy (device pixels): radius r, colour c, additive ('lighter') or normal blend,
+  // optional white outline of width w.
+  function dots(xy, n, r, c, add, w) {
+    if (!n) return;
+    var i;
+    if (gl) {
+      if (upl !== xy) {
+        gl.bindBuffer(gl.ARRAY_BUFFER, glr.db);
+        gl.bufferData(gl.ARRAY_BUFFER, xy.subarray(0, 2 * n), gl.DYNAMIC_DRAW);
+        gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+        upl = xy;
+      }
+      gl.uniform1f(glr.s, Math.min(glr.maxPt, Math.ceil(2 * (r + w / 2) + 2)));
+      gl.uniform1f(glr.r, r); gl.uniform1f(glr.w, w);
+      gl.uniform4f(glr.c, c.v[0], c.v[1], c.v[2], c.v[3] * dotAlpha);
+      gl.blendFunc(gl.SRC_ALPHA, add ? gl.ONE : gl.ONE_MINUS_SRC_ALPHA);
+      gl.drawArrays(gl.POINTS, 0, n);
+      return;
+    }
+    // canvas 2D: all n circles in one path, one fill (measured faster than stamping sprites with drawImage)
+    ctx.globalCompositeOperation = add ? 'lighter' : 'source-over';
+    ctx.globalAlpha = dotAlpha;
+    ctx.fillStyle = c.s;
+    ctx.beginPath();
+    for (i = 0; i < n; i++) { ctx.moveTo(xy[2 * i] + r, xy[2 * i + 1]); ctx.arc(xy[2 * i], xy[2 * i + 1], r, 0, 6.2832); }
+    ctx.fill();
+    if (w) { ctx.lineWidth = w; ctx.strokeStyle = '#ffffff'; ctx.stroke(); }
+  }
+
+  var selXY = new Float32Array(2 * 8000);
   function drawSel(xy, pi, n, halo, core) {
-    var i, x, y;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.fillStyle = halo;
-    ctx.beginPath();
-    for (i = 0; i < n; i++) {
+    var k = 0;
+    for (var i = 0; i < n; i++) {
       if (paths[pi[i]].r !== sel) continue;
-      x = xy[2 * i]; y = xy[2 * i + 1];
-      ctx.moveTo(x + 7 * dpr * zk, y); ctx.arc(x, y, 7 * dpr * zk, 0, 6.2832);
+      selXY[2 * k] = xy[2 * i]; selXY[2 * k + 1] = xy[2 * i + 1]; k++;
     }
-    ctx.fill();
-    ctx.globalCompositeOperation = 'source-over';
-    ctx.fillStyle = core;
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 1 * dpr;
-    ctx.beginPath();
-    for (i = 0; i < n; i++) {
-      if (paths[pi[i]].r !== sel) continue;
-      x = xy[2 * i]; y = xy[2 * i + 1];
-      ctx.moveTo(x + 3.2 * dpr * zk, y); ctx.arc(x, y, 3.2 * dpr * zk, 0, 6.2832);
-    }
-    ctx.fill();
-    ctx.stroke();
+    upl = null;
+    dots(selXY, k, 7 * dpr * zk, halo, true, 0);
+    dots(selXY, k, 3.2 * dpr * zk, core, false, 1 * dpr);
   }
 
   function setSel(r, name, mode) {
-    sel = r; selName = name || '';
+    sel = r; selName = name || ''; selMode = mode || 0;
     if (r === null) { selEl.hidden = true; }
     else {
       selEl.innerHTML = '';
       var b = document.createElement('b'); b.textContent = r; b.className = 'm' + (mode || 0);
       var t = document.createElement('span'); t.textContent = ' ' + selName;
-      var h = document.createElement('small'); h.textContent = 'Tap the map to clear';
+      var h = document.createElement('small'); h.textContent = L.clear;
       var c = document.createElement('div'); c.className = 'selcount';
       selNum = document.createElement('b'); selNum.className = 'm' + (mode || 0); selNum.textContent = '0';
-      selTxt = document.createTextNode(' buses running');
+      selTxt = document.createTextNode(L.running);
       c.appendChild(selNum); c.appendChild(selTxt);
       lastSa = -1;
       selEl.appendChild(b); selEl.appendChild(t); selEl.appendChild(c); selEl.appendChild(h);
@@ -511,15 +684,34 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
   });
 
   function draw() {
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalCompositeOperation = 'source-over';
-    var kk = view.z / vs.z;
-    if (kk === 1 && view.x === vs.x && view.y === vs.y) ctx.drawImage(st, 0, 0);
-    else {
-      ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
-      ctx.setTransform(kk, 0, 0, kk, (view.x - vs.x * kk) * dpr, (view.y - vs.y * kk) * dpr);
-      ctx.drawImage(st, 0, 0);
+    var kk = view.z / vs.z, ox = (view.x - vs.x * kk) * dpr, oy = (view.y - vs.y * kk) * dpr;
+    if (gl) {
+      gl.viewport(0, 0, cv.width, cv.height);
+      gl.clearColor(BGv[0], BGv[1], BGv[2], 1);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      gl.bindTexture(gl.TEXTURE_2D, glr.tex);
+      if (stDirty) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, st); stDirty = false; }
+      gl.disable(gl.BLEND);
+      gl.useProgram(glr.bg);
+      gl.bindBuffer(gl.ARRAY_BUFFER, glr.qb);
+      gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+      gl.uniform4f(glr.t, st.width * kk / cv.width, st.height * kk / cv.height, ox / cv.width, oy / cv.height);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+      gl.enable(gl.BLEND);
+      gl.useProgram(glr.dot);
+      gl.uniform2f(glr.v, cv.width, cv.height);
+      upl = null;
+    } else {
       ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = 1;
+      if (kk === 1 && ox === 0 && oy === 0) ctx.drawImage(st, 0, 0);
+      else {
+        ctx.fillStyle = BG; ctx.fillRect(0, 0, cv.width, cv.height);
+        ctx.setTransform(kk, 0, 0, kk, ox, oy);
+        ctx.drawImage(st, 0, 0);
+        ctx.setTransform(1, 0, 0, 1, 0, 0);
+      }
     }
     zk = Math.min(2, 1 + 0.15 * (view.z - 1));
     var T = D.trips[day], abs = 14400 + simT, nb = 0, nr = 0, nl = 0, sa = 0, i, len = T.p.length;
@@ -535,49 +727,28 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
     if (sel !== null && selNum && sa !== lastSa) {
       lastSa = sa;
       selNum.textContent = sa;
-      selTxt.nodeValue = sa === 1 ? ' bus running' : ' buses running';
+      selTxt.nodeValue = sa === 1 ? L.running1 : L.running;
     }
     var cb = nb, cl = nl, cr = nr;
     if (!vis.bus) nb = 0;
     if (!vis.lig) nl = 0;
     if (!vis.brt) nr = 0;
     lastNb = nb; lastNl = nl; lastNr = nr;
-    ctx.globalCompositeOperation = 'lighter';
-    ctx.globalAlpha = sel !== null ? 0.2 : 1;
-    var r = 0.75 * dpr * zk;
-    ctx.fillStyle = 'rgba(255,138,31,0.18)';
-    ctx.beginPath();
-    for (i = 0; i < nb; i++) { ctx.moveTo(busXY[2 * i] + r * 2.6, busXY[2 * i + 1]); ctx.arc(busXY[2 * i], busXY[2 * i + 1], r * 2.6, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#ff9a3a';
-    ctx.beginPath();
-    for (i = 0; i < nb; i++) { ctx.moveTo(busXY[2 * i] + r, busXY[2 * i + 1]); ctx.arc(busXY[2 * i], busXY[2 * i + 1], r, 0, 6.2832); }
-    ctx.fill();
-    var rl = 1.9 * dpr * zk;
-    ctx.fillStyle = 'rgba(184,188,200,0.18)';
-    ctx.beginPath();
-    for (i = 0; i < nl; i++) { ctx.moveTo(ligXY[2 * i] + rl * 2.4, ligXY[2 * i + 1]); ctx.arc(ligXY[2 * i], ligXY[2 * i + 1], rl * 2.4, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#d3d6e0';
-    ctx.beginPath();
-    for (i = 0; i < nl; i++) { ctx.moveTo(ligXY[2 * i] + rl, ligXY[2 * i + 1]); ctx.arc(ligXY[2 * i], ligXY[2 * i + 1], rl, 0, 6.2832); }
-    ctx.fill();
-    var rb = 2.6 * dpr * zk;
-    ctx.fillStyle = 'rgba(255,77,77,0.26)';
-    ctx.beginPath();
-    for (i = 0; i < nr; i++) { ctx.moveTo(brtXY[2 * i] + rb * 2.4, brtXY[2 * i + 1]); ctx.arc(brtXY[2 * i], brtXY[2 * i + 1], rb * 2.4, 0, 6.2832); }
-    ctx.fill();
-    ctx.fillStyle = '#ff6464';
-    ctx.beginPath();
-    for (i = 0; i < nr; i++) { ctx.moveTo(brtXY[2 * i] + rb, brtXY[2 * i + 1]); ctx.arc(brtXY[2 * i], brtXY[2 * i + 1], rb, 0, 6.2832); }
-    ctx.fill();
-    ctx.globalAlpha = 1;
+    dotAlpha = sel !== null ? 0.2 : 1;
+    var r = 0.75 * dpr * zk, rl = 1.9 * dpr * zk, rb = 2.6 * dpr * zk;
+    dots(busXY, nb, r * 2.6, COL.busHalo, true, 0);
+    dots(busXY, nb, r, COL.bus, true, 0);
+    dots(ligXY, nl, rl * 2.4, COL.ligHalo, true, 0);
+    dots(ligXY, nl, rl, COL.lig, true, 0);
+    dots(brtXY, nr, rb * 2.4, COL.brtHalo, true, 0);
+    dots(brtXY, nr, rb, COL.brt, true, 0);
+    dotAlpha = 1;
     if (sel !== null) {
-      drawSel(busXY, busPI, nb, 'rgba(255,138,31,0.35)', '#ffb24d');
-      drawSel(ligXY, ligPI, nl, 'rgba(184,188,200,0.35)', '#e6e8ef');
-      drawSel(brtXY, brtPI, nr, 'rgba(255,77,77,0.40)', '#ff6b6b');
+      drawSel(busXY, busPI, nb, COL.busSelHalo, COL.busSel);
+      drawSel(ligXY, ligPI, nl, COL.ligSelHalo, COL.ligSel);
+      drawSel(brtXY, brtPI, nr, COL.brtSelHalo, COL.brtSel);
     }
-    ctx.globalCompositeOperation = 'source-over';
+    if (ctx) { ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1; }
     var m = Math.min(1440, Math.floor(simT / 60));
     if (m !== lastMin) {
       lastMin = m;
@@ -586,35 +757,152 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
       drawSpark(m);
       if (!dragging) el.scrub.value = m;
     }
-    el.nBus.textContent = cb.toLocaleString('en');
-    el.nBrt.textContent = cr.toLocaleString('en');
-    el.nLig.textContent = cl.toLocaleString('en');
+    el.nBus.textContent = cb.toLocaleString(L.num);
+    el.nBrt.textContent = cr.toLocaleString(L.num);
+    el.nLig.textContent = cl.toLocaleString(L.num);
   }
 
   var last = 0;
   function frame(ts) {
     var dt = Math.min(0.1, (ts - last) / 1000); last = ts;
-    if (playing) { simT += dt * SPEEDS[speedI].v * 60; if (simT >= 86400) simT -= 86400; dirty = true; }
+    if (playing) {
+      if (SPEEDS[speedI].k === 'live') {
+        // real time: follow the wall clock so it stays exact even if the tab was in the background
+        if (!anchor) anchor = { w: Date.now(), s: simT };
+        simT = anchor.s + (Date.now() - anchor.w) / 1000;
+      } else { simT += dt * SPEEDS[speedI].v * 60; anchor = null; }
+      if (simT >= 86400) { simT -= 86400; anchor = null; }
+      dirty = true;
+    }
     if (viewDirty) { applyView(); viewDirty = false; dirty = true; }
     if (dirty) { draw(); dirty = false; }
     requestAnimationFrame(frame);
   }
 
+  // Background music: snd/snd.opus.bin (or snd.mp3.bin where Opus can't be decoded) is the track XORed
+  // with a xorshift keystream (scripts/encode_sound.py). It is fetched once, on the first play while
+  // unmuted, and loops; pausing or muting suspends it.
+  var SND_SEED = 0x9E3779B9;
+  var sndBtn = document.getElementById('snd');
+  var muted = !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches);
+  var actx = null, sndLoad = null;
+  function unscramble(u8) {
+    var x = SND_SEED;
+    for (var i = 0; i < u8.length; i++) {
+      x ^= x << 13; x ^= x >>> 17; x ^= x << 5;
+      u8[i] ^= x & 255;
+    }
+    return u8.buffer;
+  }
+  function syncSnd() {
+    sndBtn.setAttribute('aria-pressed', muted ? 'false' : 'true');
+    sndBtn.setAttribute('aria-label', muted ? L.sndOff : L.sndOn);
+    sndBtn.innerHTML = muted
+      ? '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.8h2.8L9 3.5v11L5.3 11.2H2.5z" fill="currentColor"/><path d="M12 6.5l4 5M16 6.5l-4 5"/></svg>'
+      : '<svg viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2.5 6.8h2.8L9 3.5v11L5.3 11.2H2.5z" fill="currentColor"/><path d="M12 6.4a3.6 3.6 0 0 1 0 5.2M14.2 4.3a6.6 6.6 0 0 1 0 9.4"/></svg>';
+  }
+  function loadTrack(url) {
+    return fetch(url)
+      .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+      .then(function (b) {
+        return new Promise(function (ok, fail) { actx.decodeAudioData(unscramble(new Uint8Array(b)), ok, fail); });
+      });
+  }
+  // Called from click handlers, so the AudioContext is created and resumed inside a user gesture (needed on iOS).
+  function syncAudio() {
+    var want = playing && !muted;
+    if (want && !actx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return;
+      actx = new AC();
+    }
+    if (!actx) return;
+    if (want) {
+      actx.resume();
+      if (!sndLoad) {
+        var probe = document.createElement('audio');
+        var opus = !!(probe.canPlayType && probe.canPlayType('audio/webm; codecs="opus"'));
+        sndLoad = (opus ? loadTrack('snd/snd.opus.bin').catch(function () { return loadTrack('snd/snd.mp3.bin'); })
+                        : loadTrack('snd/snd.mp3.bin'))
+          .then(function (buf) {
+            var src = actx.createBufferSource();
+            src.buffer = buf; src.loop = true;
+            src.connect(actx.destination); src.start();
+          })
+          .catch(function (e) { sndLoad = null; if (window.console) console.warn('music failed to load', e); });
+      }
+    } else if (actx.state === 'running') actx.suspend();
+  }
+  sndBtn.addEventListener('click', function () { muted = !muted; syncSnd(); syncAudio(); });
+
   function setPlay(v) {
-    playing = v;
-    el.play.setAttribute('aria-label', v ? 'Pause' : 'Play');
+    playing = v; anchor = null;
+    el.play.setAttribute('aria-label', v ? L.pause : L.play);
     el.play.innerHTML = v
       ? '<svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="4.2" height="14" rx="1"/><rect x="10.8" y="2" width="4.2" height="14" rx="1"/></svg>'
       : '<svg viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M4 2.2v13.6a.8.8 0 0 0 1.2.7l11-6.8a.8.8 0 0 0 0-1.4l-11-6.8A.8.8 0 0 0 4 2.2z"/></svg>';
   }
 
-  el.play.addEventListener('click', function () { setPlay(!playing); });
+  el.play.addEventListener('click', function () { setPlay(!playing); syncAudio(); });
+  var dayBtn = document.getElementById('day'), DAY_ORDER = ['wk', 'sat', 'sun'];
+  var langBtn = document.getElementById('lang');
+
+  function syncDay() {
+    dayBtn.textContent = L[day];
+    dayBtn.setAttribute('aria-label', L.dayAria.replace('{d}', L[day]));
+  }
+  function syncSpeed() {
+    var k = SPEEDS[speedI].k;
+    el.speed.textContent = L[k];
+    el.speed.setAttribute('aria-label', k === 'live' ? L.spdLiveAria : L.spdAria.replace('{s}', L[k]));
+  }
+  function setDay(d) {
+    if (d === day) return;
+    day = d;
+    sel = null; selEl.hidden = true;
+    syncDay();
+    buildStatic(); buildSpark(); lastMin = -1; dirty = true;
+  }
   el.speed.addEventListener('click', function () {
     speedI = (speedI + 1) % SPEEDS.length;
-    var sp = SPEEDS[speedI];
-    el.speed.textContent = sp.n;
-    el.speed.setAttribute('aria-label', 'Playback speed: ' + sp.n + ', ' + sp.v + ' timetable minutes per second');
+    anchor = null;
+    syncSpeed();
   });
+  function applyLang() {
+    L = I18N[lang];
+    document.documentElement.lang = lang === 'pt' ? 'pt-BR' : 'en';
+    cv.setAttribute('aria-label', L.map);
+    document.querySelector('.hud').setAttribute('aria-label', L.hud);
+    document.querySelector('.counts').setAttribute('aria-label', L.counts);
+    ['bus', 'lig', 'brt'].forEach(function (g) {
+      var c = document.querySelector('.chip[data-g=' + g + ']');
+      c.setAttribute('aria-label', L[g + 'Aria']);
+      c.querySelector('.lab').textContent = L[g];
+    });
+    zoomResetBtn.textContent = L.reset;
+    el.scrub.setAttribute('aria-label', L.scrub);
+    document.getElementById('info').setAttribute('aria-label', L.info);
+    document.getElementById('note').innerHTML = L.note;
+    syncSnd();
+    langBtn.setAttribute('aria-label', L.langAria);
+    Array.prototype.forEach.call(langBtn.children, function (s) { s.className = s.getAttribute('data-l') === lang ? 'on' : ''; });
+    el.play.setAttribute('aria-label', playing ? L.pause : L.play);
+    syncDay(); syncSpeed();
+    if (sel !== null) setSel(sel, selName, selMode);
+    lastMin = -1; dirty = true;
+  }
+  langBtn.addEventListener('click', function () {
+    lang = lang === 'pt' ? 'en' : 'pt';
+    try { localStorage.setItem('cwm-lang', lang); } catch (e) { /* storage unavailable */ }
+    applyLang();
+    layout();
+  });
+  // keep iOS from zooming the whole page when pinching near the controls
+  try {
+    ['gesturestart', 'gesturechange', 'gestureend'].forEach(function (n) {
+      document.addEventListener(n, function (e) { e.preventDefault(); }, { passive: false });
+    });
+  } catch (err) { /* older engines: skip */ }
   var infoBtn = document.getElementById('info'), noteEl = document.getElementById('note');
   infoBtn.addEventListener('click', function () {
     var open = noteEl.hidden;
@@ -622,15 +910,10 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
     infoBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
     layout();
   });
-  el.scrub.addEventListener('input', function () { dragging = true; simT = Math.min(1440, +el.scrub.value) * 60; dirty = true; });
+  el.scrub.addEventListener('input', function () { dragging = true; anchor = null; simT = Math.min(1440, +el.scrub.value) * 60; dirty = true; });
   el.scrub.addEventListener('change', function () { dragging = false; });
-  var dayBtn = document.getElementById('day'), DAY_ORDER = ['wk', 'sat', 'sun'];
   dayBtn.addEventListener('click', function () {
-    day = DAY_ORDER[(DAY_ORDER.indexOf(day) + 1) % 3];
-    sel = null; selEl.hidden = true;
-    dayBtn.textContent = NAMES[day];
-    dayBtn.setAttribute('aria-label', 'Timetable day: ' + NAMES[day] + '. Tap to change.');
-    buildStatic(); buildSpark(); lastMin = -1; dirty = true;
+    setDay(DAY_ORDER[(DAY_ORDER.indexOf(day) + 1) % 3]);
   });
   Array.prototype.forEach.call(document.querySelectorAll('.chip'), function (c) {
     c.addEventListener('click', function () {
@@ -644,6 +927,7 @@ button:focus-visible, #scrub:focus-visible { outline: 2px solid var(--hot); outl
   var rt = 0;
   window.addEventListener('resize', function () { clearTimeout(rt); rt = setTimeout(layout, 120); });
   setPlay(playing);
+  applyLang();
   layout();
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { buildStatic(); dirty = true; });
   requestAnimationFrame(frame);
